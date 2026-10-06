@@ -1,15 +1,12 @@
 """Async database engine, session factory, and schema helper.
 
-The connection URL is read from the ``DATABASE_URL`` environment variable, with a
-fallback to the local docker-compose Postgres so the package runs with no config.
-This is the one place that reads the environment; callers import ``Session``.
+The connection URL comes from the typed settings tree (``Settings.database_url``,
+sourced from ``DATABASE_URL``), with a fallback to the local docker-compose
+Postgres so the package runs with no config. ``DATABASE_URL`` is re-exported here
+for the psycopg checkpointer, which derives its DSN from the same value.
 
-FUTURE: move ``DATABASE_URL`` into a typed ``pydantic-settings`` tree (tiered by
-environment / DB backend) to match the rest of the stack, and use Alembic instead
-of ``create_all`` for production migrations.
+FUTURE: use Alembic instead of ``create_all`` for production migrations.
 """
-
-import os
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -18,10 +15,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql+asyncpg://florence:florence@localhost:5432/florence",
-)
+from CareAI.config import get_settings
+
+DATABASE_URL = get_settings().database_url
 
 engine = create_async_engine(DATABASE_URL)
 Session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

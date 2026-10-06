@@ -13,12 +13,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langchain.chat_models import init_chat_model
 
+from CareAI.agents.escalation import build_escalation_agent
 from CareAI.agents.reporting import build_reporting_agent
 from CareAI.api.dependencies import get_policy_service, get_settings
 from CareAI.api.routes.policies import build_policies_router
 from CareAI.api.routes.reporting import build_reporting_router
 from CareAI.database import create_all
 from CareAI.database.checkpointer import open_checkpointer
+from CareAI.telemetry import configure_telemetry
 
 
 @asynccontextmanager
@@ -28,17 +30,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Ensures the ORM schema exists, opens the Postgres-backed graph-state
     checkpointer, and compiles the reporting agent against it once so every
     request shares one agent whose conversations survive restarts. The
+    escalation agent (stateless severity assessment) is compiled here too. The
     checkpointer's connection pool is closed on shutdown.
     """
     settings = get_settings()
     model = init_chat_model(
         settings.openai_model, use_responses_api=True, reasoning_effort="low"
     )
+    policy_service = get_policy_service()
     await create_all()
     async with open_checkpointer() as checkpointer:
         app.state.reporting_agent = build_reporting_agent(
-            model, get_policy_service(), checkpointer=checkpointer
+            model, policy_service, checkpointer=checkpointer
         )
+        app.state.escalation_agent = build_escalation_agent(model, policy_service)
         yield
 
 
@@ -51,6 +56,10 @@ def create_app() -> FastAPI:
     """
     settings = get_settings()
     app = FastAPI(title="CareAI", version="0.1.0", lifespan=lifespan)
+
+    # Trace requests, the agent, and DB calls to the configured OTLP endpoint
+    # (a no-op unless OTEL_ENABLED is set); instrument before routers are added.
+    configure_telemetry(app, settings)
 
     app.add_middleware(
         CORSMiddleware,

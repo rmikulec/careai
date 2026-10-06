@@ -1,8 +1,9 @@
 """OpenTelemetry tracing setup for the CareAI API.
 
 Wires a single self-hosted OTLP pipeline: a ``TracerProvider`` exporting spans
-over gRPC to an OTLP endpoint (a local Jaeger/collector in the dev stack), with
-automatic instrumentation for FastAPI requests and the SQLAlchemy engine. The
+over gRPC to an OTLP endpoint (a local Grafana otel-lgtm backend in the dev
+stack), with automatic instrumentation for FastAPI requests and the SQLAlchemy
+engine. The
 reporting agent adds its own per-stage spans via ``opentelemetry.trace`` (a no-op
 until this configures a real provider), so agent code carries no hard dependency
 on telemetry being enabled.
@@ -68,8 +69,14 @@ def configure_telemetry(app: FastAPI, settings: Settings) -> None:
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
         # The async engine wraps a sync Engine that the instrumentation hooks.
+        # skip_dep_check: the instrumentor's declared ceiling (< 2.1.0) lags
+        # behind our pinned SQLAlchemy 2.1.x, but it hooks the stable engine
+        # execute events and traces correctly; without this the guard would
+        # silently skip instrumentation.
         SQLAlchemyInstrumentor().instrument(
-            engine=engine.sync_engine, tracer_provider=provider
+            engine=engine.sync_engine,
+            tracer_provider=provider,
+            skip_dep_check=True,
         )
         _configured = True
         logger.info(

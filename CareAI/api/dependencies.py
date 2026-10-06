@@ -13,15 +13,13 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from langchain.chat_models import init_chat_model
 from langgraph.graph.state import CompiledStateGraph
 
-from CareAI.config import Settings
+from CareAI.config import Settings, get_settings
 from CareAI.database import IncidentService, PolicyService
 from CareAI.ingestion import PolicyIngestor
 
-
-@lru_cache
-def get_settings() -> Settings:
-    """Return the cached application settings."""
-    return Settings()
+# Re-exported so routes and the app factory can depend on the one cached
+# accessor; the canonical definition lives in CareAI.config.
+__all__ = ["get_settings"]
 
 
 @lru_cache
@@ -60,6 +58,21 @@ def get_reporting_agent(request: Request) -> CompiledStateGraph:
         CompiledStateGraph: The compiled reporting agent.
     """
     return request.app.state.reporting_agent
+
+
+def get_escalation_agent(request: Request) -> CompiledStateGraph:
+    """Return the shared escalation agent compiled at startup.
+
+    Built once in the app lifespan and stored on ``app.state``; used after a
+    report is finalized to assess its severity grounded in the linked policies.
+
+    Args:
+        request (Request): The incoming request, used to reach ``app.state``.
+
+    Returns:
+        CompiledStateGraph: The compiled escalation agent.
+    """
+    return request.app.state.escalation_agent
 
 
 def require_api_key(

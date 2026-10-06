@@ -37,12 +37,18 @@ services:
     build: .
     environment:
       ENVIRONMENT: development
-      # The app reads DATABASE_URL (CareAI/database/session.py), not discrete DB_* vars.
+      # Settings load from these env vars (CareAI/config.py).
       DATABASE_URL: postgresql+asyncpg://florence:florence@db:5432/florence
       API_KEYS: dev-local-key
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
       CORS_ORIGINS: http://localhost:3000
+      # OpenTelemetry: export request/agent/DB spans to the local Grafana
+      # otel-lgtm backend (OTLP gRPC). Self-hosted inside the compose network —
+      # no PHI leaves the box.
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4317
+      OTEL_SERVICE_NAME: careai-api
     ports:
       - "8000:8000"
     healthcheck:
@@ -55,6 +61,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      otel-lgtm:
+        condition: service_started
 
   # Streamlit chat UI for the reporting agent. Reuses the same image as the API
   # (just a different command); talks to the API over HTTP inside the network.
@@ -74,6 +82,17 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  # Grafana otel-lgtm: the self-hosted trace backend the API exports to. One
+  # image bundling Grafana + Tempo (traces) + Prometheus + Loki, OTLP-native.
+  # Explore traces in Grafana at http://localhost:3000 (anonymous access; the
+  # Tempo datasource is pre-wired). Dev only — storage is in-memory.
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "3000:3000"  # Grafana UI
+      - "4317:4317"  # OTLP gRPC (the API exports here)
+      - "4318:4318"  # OTLP HTTP
 
   # Web UI for inspecting the Postgres/pgvector data. The CareAI server is
   # pre-registered via servers.json; connect with password "florence".
