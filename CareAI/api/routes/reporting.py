@@ -19,10 +19,11 @@ from CareAI.agents.reporting.prompts import PHASE_DONE
 from CareAI.api.dependencies import (
     get_escalation_agent,
     get_incident_service,
+    get_notification_service,
     get_reporting_agent,
     require_api_key,
 )
-from CareAI.database import IncidentService
+from CareAI.database import IncidentService, NotificationService
 from CareAI.models import IncidentReport
 
 logger = logging.getLogger(__name__)
@@ -225,6 +226,35 @@ class ThreadSummary(BaseModel):
     updated_at: str | None = None
 
 
+class NotificationItem(BaseModel):
+    """A notification the escalation agent drafted and queued for a report.
+
+    Attributes:
+        id (int): Queue row id.
+        report_id (str): The report (thread) the notification concerns.
+        severity (Optional[str]): The severity label that drove the draft.
+        recipient (str): Role or team to notify.
+        channel (str): Delivery channel (``email`` / ``page`` / ``sms`` /
+            ``in_app``).
+        subject (str): Subject line.
+        body (str): Notification message.
+        related_policies (list[dict]): Policy chunk citations grounding it.
+        status (str): Queue status (``queued`` in this demo).
+        created_at (Optional[str]): ISO timestamp of when it was queued.
+    """
+
+    id: int
+    report_id: str
+    severity: str | None = None
+    recipient: str
+    channel: str
+    subject: str
+    body: str
+    related_policies: list[dict] = Field(default_factory=list)
+    status: str
+    created_at: str | None = None
+
+
 def _policy_summary(policy: dict, limit: int = 240) -> str:
     """Summarize an added policy from its first chunk (usually the purpose)."""
     chunks = policy.get("chunks") or []
@@ -393,6 +423,23 @@ def build_reporting_router() -> APIRouter:
                 detail=f"No finalized report for thread {thread_id!r}",
             )
         return report
+
+    @router.get(
+        "/threads/{thread_id}/notifications",
+        response_model=list[NotificationItem],
+    )
+    async def list_thread_notifications(
+        thread_id: str,
+        notification_service: NotificationService = Depends(get_notification_service),
+    ) -> list[NotificationItem]:
+        """List the notifications drafted for a thread's report, newest first.
+
+        The escalation agent drafts these once the report is finalized and
+        severity-assessed; the list is empty until then (or when the severity
+        warranted no notification).
+        """
+        rows = await notification_service.list(report_id=thread_id)
+        return [NotificationItem(**row) for row in rows]
 
     @router.get("/reports", response_model=list[ReportHistoryItem])
     async def list_reports(

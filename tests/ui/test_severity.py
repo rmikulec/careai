@@ -28,6 +28,6 @@ def test_undetermined_severity_is_flagged_for_attention() -> None:
 def test_banner_hidden_until_finalized_and_assessed() -> None:
     """No finalized report, or no escalation yet, renders nothing (and never raises)."""
     # Would raise if it tried to render anything via st.* in this guard path.
-    ui._render_severity(None)
-    ui._render_severity({})
-    ui._render_severity({"severity": None, "escalation": None})
+    ui._render_severity(None, [])
+    ui._render_severity({}, [])
+    ui._render_severity({"severity": None, "escalation": None}, [])

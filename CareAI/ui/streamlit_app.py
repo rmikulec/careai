@@ -4,9 +4,10 @@ A thin client: it POSTs practitioner messages to the API's reporting endpoints,
 streams the agent's reply via Server-Sent Events, and renders the report items
 collected so far alongside the conversation. Once a thread finalizes, it surfaces
 the escalation agent's policy-grounded severity (level, rationale, and source
-citations) as a banner above the report. It imports nothing from the agent or the
-database — all state lives server-side, keyed by the ``thread_id`` held in the
-Streamlit session.
+citations) as a banner above the report, followed by the notifications it drafted
+(a collapsible list). It imports nothing from the agent or the database — all
+state lives server-side, keyed by the ``thread_id`` held in the Streamlit
+session.
 
 Run with ``streamlit run CareAI/ui/streamlit_app.py`` (or ``uv run task ui``).
 Configuration comes from the shared settings tree (:mod:`CareAI.config`):
@@ -166,6 +167,29 @@ def _fetch_finalized_report(thread_id: str) -> dict | None:
     return response.json()
 
 
+def _fetch_notifications(thread_id: str) -> list[dict]:
+    """Fetch the notifications drafted for a thread's finalized report.
+
+    Args:
+        thread_id (str): The conversation to inspect.
+
+    Returns:
+        list[dict]: Queued notification rows (newest first), or an empty list if
+        none were drafted or the API is unreachable.
+    """
+    try:
+        response = httpx.get(
+            _reporting_url(thread_id, "/notifications"),
+            headers=_HEADERS,
+            timeout=10.0,
+        )
+    except httpx.RequestError:
+        return []
+    if response.status_code != 200:
+        return []
+    return response.json()
+
+
 def _fetch_threads() -> list[dict]:
     """Fetch every reporting thread (finalized or in progress), newest first.
 
@@ -246,11 +270,48 @@ def _severity_tone(severity: str | None) -> tuple[str, str]:
     return "info", "ℹ️"
 
 
-def _render_severity(finalized: dict | None) -> None:
+def _render_drafted_notifications(notifications: list[dict]) -> None:
+    """Render the escalation agent's drafted notifications as a collapsible list.
+
+    Shown within the severity section once a report is finalized and assessed.
+    Each notification is its own expander (recipient + subject in the label); the
+    channel, status, body, and policy citations are inside. A caption explains the
+    empty case — the severity warranted no notification — so the absence reads as
+    a decision, not a gap.
+
+    Args:
+        notifications (list[dict]): Queued notification rows for the report.
+    """
+    st.markdown("**Drafted notifications**")
+    if not notifications:
+        st.caption("No notifications were drafted at this severity.")
+        return
+    for note in notifications:
+        recipient = note.get("recipient", "?")
+        subject = note.get("subject", "")
+        with st.expander(f"{recipient} · {subject}", expanded=False):
+            meta = " · ".join(
+                part for part in (note.get("channel"), note.get("status")) if part
+            )
+            if meta:
+                st.caption(meta)
+            body = note.get("body")
+            if body:
+                st.write(body)
+            _render_policy_links(note.get("related_policies") or [])
+
+
+def _render_severity(finalized: dict | None, notifications: list[dict]) -> None:
     """Render the policy-grounded severity banner for a finalized report.
 
     No-op until the thread is finalized and the escalation agent has run (so
-    nothing shows mid-intake, and nothing shows if the assessment failed).
+    nothing shows mid-intake, and nothing shows if the assessment failed). When it
+    has run, the drafted notifications are listed beneath the rationale/citations.
+
+    Args:
+        finalized (Optional[dict]): The finalized report payload (with
+            ``escalation``), or ``None`` while the thread is in progress.
+        notifications (list[dict]): Notifications drafted for the report.
     """
     escalation = (finalized or {}).get("escalation") or {}
     if not escalation:
@@ -280,6 +341,8 @@ def _render_severity(finalized: dict | None) -> None:
                     f"**{src.get('policy_id', '?')}** · chunk "
                     f"{src.get('chunk', '?')} — {src.get('reason', '')}"
                 )
+
+    _render_drafted_notifications(notifications)
     st.divider()
 
 
@@ -478,11 +541,15 @@ def main() -> None:
     # intake is done; until then it is None and the severity banner stays hidden.
     report = _fetch_report(st.session_state.thread_id)
     finalized = _fetch_finalized_report(st.session_state.thread_id)
+    # Notifications exist only post-finalization; skip the call while in progress.
+    notifications = (
+        _fetch_notifications(st.session_state.thread_id) if finalized else []
+    )
 
     with report_col:
         st.subheader("Report")
         with st.container(height=_PANEL_HEIGHT):
-            _render_severity(finalized)
+            _render_severity(finalized, notifications)
             _render_report(report)
 
 
