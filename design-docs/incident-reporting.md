@@ -127,14 +127,13 @@ Severity is **not** a scale we impose — the facility's policies define it, so 
 escalation agent reads it out of them. The moment a thread finalizes
 (`_persist_if_done`), the finalized `IncidentReport` is saved and then handed to a
 small, **self-contained** LangGraph subagent (`CareAI/agents/escalation/`,
-`gather` → `assess`).
+`gather` → `assess` → `notify`).
 
 **It starts from a fresh context.** The route hands the subagent *only* the
 finalized report dict — never the reporting conversation. Its state has no
 `messages` channel and it compiles with no checkpointer, so the intake chat
-cannot leak in and nothing persists between runs; it rebuilds its own two-message
-prompt from scratch every time. (Pinned by
-`tests/agents/escalation/test_isolation.py`.)
+cannot leak in and nothing persists between runs; it rebuilds each prompt from
+scratch every time. (Pinned by `tests/agents/escalation/test_isolation.py`.)
 
 **The policies are re-fetched, not passed through.** The report carries only the
 chunks cited by each recorded item, not the full grounding set — so the subagent
@@ -151,6 +150,17 @@ retrieves what it needs itself:
   `severity` (the policy's own label, or `null` when the policies define no
   applicable criteria → human triage), a `rationale`, and `sources` (chunk
   citations, same `PolicyLink` shape used throughout).
+- **notify** binds the `draft_notification` tool and, *depending on the assessed
+  severity*, drafts the notifications the policies require — one per recipient a
+  "Severity & Reporting" section names (Risk Management, the on-call Nursing
+  Supervisor, Employee Health …), addressed to a role/team, never a person, and
+  cited to the chunk that requires it. The model proposes the `draft_notification`
+  calls; the node drains them, stamps each with the report id and severity (never
+  trusting the model with those), and writes it to the **notifications queue**
+  (`notifications` table, `CareAI/database/notification.py`). The queue is a
+  landing zone only — **nothing consumes it in this demo**; rows are written
+  `status="queued"` for a future delivery worker. If the severity warrants none,
+  the model calls the tool zero times and nothing is queued.
 
 It is **best-effort and off the finalization critical path**: the report is saved
 first, severity is attached in a second upsert, and an assessment failure is
@@ -201,9 +211,10 @@ graph TD
     actions  <-. search / add .-> POL
 
     WRAP --> SAVE[(incident_reports · finalized)]:::store
-    SAVE -->|hand over report only| ESC["escalation subagent<br/>gather → assess · fresh context"]:::stage
+    SAVE -->|hand over report only| ESC["escalation subagent<br/>gather → assess → notify · fresh context"]:::stage
     ESC -. refetch cited policies .-> POL
     ESC -->|severity + rationale| SAVE
+    ESC -->|drafted notifications| NOTIF[(notifications · queue)]:::store
 ```
 
 ## API
@@ -215,6 +226,8 @@ All `/api/v1/*` routes require a valid `X-API-Key`; `/health` is unauthenticated
 | POST | `/api/v1/reporting/threads/{id}/messages` | Send a message, get the full reply |
 | POST | `/api/v1/reporting/threads/{id}/stream` | SSE: `token` / `tool` / `done` events |
 | GET  | `/api/v1/reporting/threads/{id}` | The report collected so far |
+| GET  | `/api/v1/reporting/threads/{id}/report` | The finalized report (with severity) |
+| GET  | `/api/v1/reporting/threads/{id}/notifications` | Notifications drafted for the report |
 | POST | `/api/v1/policies/upload` | Upload PDF(s); ingested concurrently |
 | GET  | `/api/v1/policies` | List ingested policies |
 
@@ -227,19 +240,20 @@ otherwise-silent discovery stage.
 
 **Built:** policy ingestion + pgvector RAG; the four-stage agent; code-enforced
 chunk grounding; action dispositions; the deterministic completeness gate; the
-policy-grounded **escalation (severity) agent**; the reporting + policies API with
-API-key auth, CORS, and SSE streaming; the Streamlit UI.
+policy-grounded **escalation (severity) agent** with policy-grounded
+**notification drafting** into a `notifications` queue; the reporting + policies
+API with API-key auth, CORS, and SSE streaming; the Streamlit UI.
 
 **Planned / not yet built:**
 
 - **Role-based access** (employee sees own reports; manager sees all, plus past
   incidents and procedure gaps) — enforced at the store layer, not the prompt.
-- **Escalation routing** — notifications & deadlines drafted from the cited
-  policy prose, building on the severity the escalation agent now assigns.
+- **Notification delivery** — a worker that drains the `notifications` queue and
+  actually sends each (email/page/…), plus the deadlines (who-by-when) parsed
+  from the cited policy prose. Drafting into the queue is built; delivery is not.
 - **Review pass** — deterministic checks (Pydantic validity, every citation points
   at a real chunk — already enforced at record time) plus one LLM pass (narrative
   vs. recorded data, policy conflicts) that decides when a human must review.
-- **Notifications & deadlines** extracted from the cited policy prose and drafted.
 - **Audit logging** (append-only who/what/when, identifiers only — no PHI).
 - **Past-incident RAG** — `search_incidents` is a mock today; the real
   de-identified corpus is a separate feature.
