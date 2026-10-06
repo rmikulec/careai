@@ -34,6 +34,11 @@ _HEADERS = {"X-API-Key": _API_KEY}
 # stay bounded so a dead API surfaces quickly rather than hanging the UI.
 _TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
 
+
+class _StreamError(RuntimeError):
+    """Raised when the API emits a terminal SSE ``error`` frame mid-turn."""
+
+
 # Colored labels for an action's compliance disposition (Streamlit markdown
 # color syntax), and a sort order that surfaces the procedure gaps first.
 # Non-punitive badges: gaps are surfaced plainly (not hidden), but worded as
@@ -97,6 +102,7 @@ def _stream_turn(thread_id: str, message: str, status_box, text_box) -> tuple[st
     Raises:
         httpx.HTTPStatusError: If the API returns a non-2xx status.
         httpx.RequestError: If the API is unreachable.
+        _StreamError: If the API emits a terminal SSE ``error`` frame mid-turn.
     """
     parts: list[str] = []
     latest_status = ""
@@ -117,6 +123,10 @@ def _stream_turn(thread_id: str, message: str, status_box, text_box) -> tuple[st
                     if line:
                         latest_status = line
                         status_box.markdown(f"_{line}…_")
+                elif event == "error":
+                    raise _StreamError(
+                        data.get("message", "The assistant hit an error.")
+                    )
     return "".join(parts), latest_status
 
 
@@ -474,6 +484,10 @@ def _run_turn(prompt: str) -> None:
             reply, _ = _stream_turn(
                 st.session_state.thread_id, prompt, status_box, text_box
             )
+        except _StreamError as exc:
+            status_box.empty()
+            text_box.error(str(exc))
+            return
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
                 text_box.error("Unauthorized — check CAREAI_API_KEY.")

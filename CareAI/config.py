@@ -8,7 +8,7 @@ process-wide instance rather than constructing ``Settings`` directly.
 """
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from pydantic import field_validator
@@ -29,6 +29,13 @@ class Settings(BaseSettings):
         cors_origins (list[str]): Allowed CORS origins; comma-separated in the
             environment.
         openai_model (str): Chat model id used by the reporting agent.
+        llm_reasoning_effort (Literal): Reasoning effort passed to the chat model
+            ("minimal", "low", "medium", or "high"); higher trades latency/cost
+            for deeper reasoning.
+        llm_max_retries (int): Times the chat model retries a failed request
+            (transient HTTP errors / rate limits) before giving up.
+        agent_recursion_limit (int): Maximum LangGraph super-steps allowed for a
+            single agent turn before a ``GraphRecursionError`` is raised.
         database_url (str): SQLAlchemy async connection URL for Postgres; the
             local docker-compose DB is the default so the app runs unconfigured.
         otel_enabled (bool): Whether to export OpenTelemetry traces. Off by
@@ -49,6 +56,9 @@ class Settings(BaseSettings):
 
     # LLM
     openai_model: str = "gpt-5.6-luna"
+    llm_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "medium"
+    llm_max_retries: int = 2
+    agent_recursion_limit: int = 25
 
     # Database
     database_url: str = "postgresql+asyncpg://florence:florence@localhost:5432/florence"

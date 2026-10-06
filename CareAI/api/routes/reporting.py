@@ -21,6 +21,7 @@ from CareAI.api.dependencies import (
     get_incident_service,
     get_notification_service,
     get_reporting_agent,
+    get_settings,
     require_api_key,
 )
 from CareAI.database import IncidentService, NotificationService
@@ -275,6 +276,11 @@ def build_reporting_router() -> APIRouter:
         dependencies=[Depends(require_api_key)],
     )
 
+    # Captured once at build time; bounds the super-steps of a single agent turn
+    # (both the blocking and the streamed endpoint) so a looping graph fails with
+    # a GraphRecursionError instead of running unbounded.
+    recursion_limit = get_settings().agent_recursion_limit
+
     @router.post("/threads/{thread_id}/messages", response_model=MessageResponse)
     async def post_message(
         thread_id: str,
@@ -289,7 +295,10 @@ def build_reporting_router() -> APIRouter:
         assembled from state, stored, and severity-assessed before the reply is
         returned.
         """
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": recursion_limit,
+        }
         result = await agent.ainvoke({"messages": [HumanMessage(body.message)]}, config)
         await _persist_if_done(thread_id, result, incident_service, escalation_agent)
         return MessageResponse(thread_id=thread_id, reply=result["messages"][-1].text)
@@ -315,7 +324,10 @@ def build_reporting_router() -> APIRouter:
         prose stay internal (only their tool activity surfaces as status), and
         the intake-extraction call is silent.
         """
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": recursion_limit,
+        }
         inputs = {"messages": [HumanMessage(body.message)]}
 
         # Stages whose streamed LLM text IS the assistant's reply to persist.
@@ -326,45 +338,64 @@ def build_reporting_router() -> APIRouter:
         status_tool_nodes = {"discover", "factors", "actions"}
 
         async def events() -> AsyncIterator[str]:
-            async for mode, chunk in agent.astream(
-                inputs, config, stream_mode=["messages", "updates"]
-            ):
-                if mode == "messages":
-                    message_chunk, meta = chunk
-                    node = meta.get("langgraph_node")
-                    if node in answer_token_nodes and message_chunk.text:
-                        yield _sse("token", {"text": message_chunk.text})
-                    continue
-                for node, update in chunk.items():
-                    messages = _extract_messages(update)
-                    if node == "plan":
-                        # The plan itself stays internal; show only that work is
-                        # happening.
-                        yield _sse(
-                            "status",
-                            {"text": "Reviewing the policies and planning what to ask"},
-                        )
-                    elif node in status_tool_nodes:
-                        # Tool calls become transient status lines; the discovery
-                        # narration prose is intentionally not surfaced.
-                        for message in messages:
-                            for call in getattr(message, "tool_calls", None) or []:
-                                yield _sse(
-                                    "status",
-                                    {
-                                        "text": _describe_tool_call(
-                                            call["name"], call["args"]
-                                        )
-                                    },
-                                )
-                    elif node in answer_message_nodes and messages:
-                        yield _sse("token", {"text": messages[-1].text})
-            # Once the stream ends, persist the finalized report if the turn
-            # completed intake. Read the settled state from the checkpointer.
-            snapshot = await agent.aget_state(config)
-            await _persist_if_done(
-                thread_id, snapshot.values, incident_service, escalation_agent
-            )
+            # The response is already committed (status 200, headers sent) by the
+            # time this generator runs, so a failure mid-turn can't become an HTTP
+            # error. Surface it as a terminal SSE ``error`` frame instead, so the
+            # client gets a clean signal rather than a silently truncated stream.
+            try:
+                async for mode, chunk in agent.astream(
+                    inputs, config, stream_mode=["messages", "updates"]
+                ):
+                    if mode == "messages":
+                        message_chunk, meta = chunk
+                        node = meta.get("langgraph_node")
+                        if node in answer_token_nodes and message_chunk.text:
+                            yield _sse("token", {"text": message_chunk.text})
+                        continue
+                    for node, update in chunk.items():
+                        messages = _extract_messages(update)
+                        if node == "plan":
+                            # The plan itself stays internal; show only that work
+                            # is happening.
+                            yield _sse(
+                                "status",
+                                {
+                                    "text": "Reviewing the policies and planning "
+                                    "what to ask"
+                                },
+                            )
+                        elif node in status_tool_nodes:
+                            # Tool calls become transient status lines; the
+                            # discovery narration prose is intentionally not
+                            # surfaced.
+                            for message in messages:
+                                for call in getattr(message, "tool_calls", None) or []:
+                                    yield _sse(
+                                        "status",
+                                        {
+                                            "text": _describe_tool_call(
+                                                call["name"], call["args"]
+                                            )
+                                        },
+                                    )
+                        elif node in answer_message_nodes and messages:
+                            yield _sse("token", {"text": messages[-1].text})
+                # Once the stream ends, persist the finalized report if the turn
+                # completed intake. Read the settled state from the checkpointer.
+                snapshot = await agent.aget_state(config)
+                await _persist_if_done(
+                    thread_id, snapshot.values, incident_service, escalation_agent
+                )
+            except Exception:
+                logger.exception("Reporting stream failed for thread %r", thread_id)
+                yield _sse(
+                    "error",
+                    {
+                        "message": "The assistant hit an error completing this "
+                        "turn. Please try again."
+                    },
+                )
+                return
             yield _sse("done", {"thread_id": thread_id})
 
         return StreamingResponse(

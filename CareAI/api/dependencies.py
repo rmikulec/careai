@@ -45,7 +45,10 @@ def get_policy_ingestor() -> PolicyIngestor:
     """Return the cached policy ingestion pipeline (singleton)."""
     settings = get_settings()
     model = init_chat_model(
-        settings.openai_model, use_responses_api=True, reasoning_effort="low"
+        settings.openai_model,
+        use_responses_api=True,
+        reasoning_effort=settings.llm_reasoning_effort,
+        max_retries=settings.llm_max_retries,
     )
     return PolicyIngestor(model)
 

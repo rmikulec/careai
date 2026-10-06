@@ -39,7 +39,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     model = init_chat_model(
-        settings.openai_model, use_responses_api=True, reasoning_effort="low"
+        settings.openai_model,
+        use_responses_api=True,
+        reasoning_effort=settings.llm_reasoning_effort,
+        max_retries=settings.llm_max_retries,
     )
     policy_service = get_policy_service()
     await create_all()
