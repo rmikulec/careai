@@ -49,21 +49,44 @@ _INCIDENTS: list[dict] = [
 ]
 
 
-def covered_policy_ids(actions: list[dict]) -> set[str]:
-    """Return the set of policy ids cited by at least one recorded action.
+def satisfied_plan_item_ids(*recorded: list[dict]) -> set[str]:
+    """Return the set of plan-item ids addressed by recorded factors/actions.
+
+    Each recorded factor or action carries a ``satisfies`` list naming the plan
+    item ids it answered. The actions stage is complete once this set covers every
+    ``action`` item in the plan.
 
     Args:
-        actions (list[dict]): Recorded actions, each with ``related_policies``.
+        *recorded (list[dict]): One or more lists of recorded items (factors,
+            actions), each item optionally carrying a ``satisfies`` id list.
 
     Returns:
-        set[str]: Every ``policy_id`` cited across the recorded actions. The
-        actions stage is complete once this covers every added policy.
+        set[str]: Every plan-item id referenced across the recorded items.
     """
     return {
-        link["policy_id"]
-        for action in actions
-        for link in action.get("related_policies", [])
+        item_id
+        for items in recorded
+        for item in items
+        for item_id in item.get("satisfies", [])
     }
+
+
+def unmet_action_items(state: dict) -> list[dict]:
+    """Return the plan's ``action`` items that have no recorded action yet.
+
+    Args:
+        state (dict): Current graph state (reads ``plan`` and ``actions``).
+
+    Returns:
+        list[dict]: The ``action`` plan items whose id is not yet in the set of
+        satisfied plan-item ids; empty once intake is complete.
+    """
+    satisfied = satisfied_plan_item_ids(state.get("actions", []))
+    return [
+        item
+        for item in state.get("plan", [])
+        if item.get("kind") == "action" and item.get("id") not in satisfied
+    ]
 
 
 def _validate_links(
@@ -167,6 +190,7 @@ def record_action(
     disposition: ActionDisposition,
     related_policies: list[PolicyLink],
     runtime: ToolRuntime,
+    satisfies: list[str] | None = None,
 ) -> Command:
     """
     Record a policy-required action and whether it was carried out as required. `action` describes
@@ -175,7 +199,9 @@ def record_action(
     incorrectly, or done when it should not have been) — omissions and commissions are procedure
     gaps. Each related policy is a citation: the policy id, the chunk index that grounds it, and a
     reason it applies. Every policy id must have already been added via add_policy, and the chunk
-    index must be one shown in a search_policies result for that policy.
+    index must be one shown in a search_policies result for that policy. `satisfies` lists the plan
+    "action" item id(s) this record addresses, so they are not asked again and completeness can be
+    gated on every action item being assessed.
     """
     links, error = _validate_links(related_policies, runtime.state)
     if error:
@@ -193,6 +219,7 @@ def record_action(
                     "description": action,
                     "disposition": disposition,
                     "related_policies": links,
+                    "satisfies": satisfies or [],
                 }
             ],
             "messages": [
@@ -210,12 +237,15 @@ def record_contributing_factor(
     factor: str,
     runtime: ToolRuntime,
     related_policies: list[PolicyLink] | None = None,
+    satisfies: list[str] | None = None,
 ) -> Command:
     """
     Record a condition or cause that contributed to the incident (e.g. an overfilled sharps
     container, an interruption, understaffing). Policy citations are OPTIONAL: include a
     PolicyLink only when the factor is a deviation from a specific policy standard. Any cited
     policy must have been added via add_policy, and the cited chunk index must exist in it.
+    `satisfies` lists the plan "factor" item id(s) this record addresses, so they are not asked
+    again.
     """
     links, error = _validate_links(related_policies or [], runtime.state)
     if error:
@@ -228,7 +258,13 @@ def record_contributing_factor(
         )
     return Command(
         update={
-            "factors": [{"description": factor, "related_policies": links}],
+            "factors": [
+                {
+                    "description": factor,
+                    "related_policies": links,
+                    "satisfies": satisfies or [],
+                }
+            ],
             "messages": [
                 ToolMessage(
                     content=f"Recorded contributing factor: {factor!r} (policies: {[lnk['policy_id'] for lnk in links]})",
@@ -266,24 +302,25 @@ def advance_to_actions(runtime: ToolRuntime) -> Command:
 @tool
 def finish_report(runtime: ToolRuntime) -> Command:
     """
-    Signal that intake is complete. This is only allowed once EVERY added policy has at least one
-    recorded action with a disposition (done_correctly, omission, or commission) — that is the
-    definition of a complete intake. If any added policy is still uncovered, this is rejected and
-    names the gaps; ask about each and record_action before finishing. On success, a summary of
-    the report is shown to the practitioner.
+    Signal that intake is complete. This is only allowed once EVERY "action" item in the plan has
+    been assessed — i.e. each has a recorded action (with a disposition) referencing its id via
+    `satisfies`. That is the definition of a complete intake: every distinct required action the
+    policies call for has been checked, not every policy re-asked. If any action item is still
+    unassessed, this is rejected and names the gaps; ask about each and record_action before
+    finishing. On success, a summary of the report is shown to the practitioner.
     """
-    state = runtime.state
-    added = {p["id"] for p in state.get("policies", [])}
-    uncovered = sorted(added - covered_policy_ids(state.get("actions", [])))
-    if uncovered:
+    unmet = unmet_action_items(runtime.state)
+    if unmet:
+        gaps = ", ".join(f"{item['id']} ({item['topic']})" for item in unmet)
         return Command(
             update={
                 "messages": [
                     ToolMessage(
                         content=(
-                            f"Not finished: these added policies have no recorded action yet: "
-                            f"{uncovered}. For each, ask what it required and whether it was done, "
-                            f"then record_action with a disposition before calling finish_report."
+                            f"Not finished: these plan action items have no recorded action yet: "
+                            f"{gaps}. For each, ask what it required and whether it was done, then "
+                            f"record_action with a disposition and its id in `satisfies` before "
+                            f"calling finish_report."
                         ),
                         tool_call_id=runtime.tool_call_id,
                     )

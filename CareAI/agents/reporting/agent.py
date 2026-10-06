@@ -9,22 +9,30 @@ the LLM's:
    searches the policy library and adds every relevant policy, following the
    threads between related policies and narrating its findings to the user.
 3. ``plan`` — reads the full text of the added policies and drafts an
-   ``IntakePlan`` (the factor probes and action checks to work through), shown to
-   the practitioner and stored in state to steer the deep-dive stages.
+   ``IntakePlan`` (the factor probes and action checks to work through),
+   consolidating requirements shared across policies into one item each and
+   stored in state to steer the deep-dive stages. It is internal — not shown to
+   the practitioner.
 4. ``factors`` — a grounded Q&A loop that digs into the confounding/contributing
    factors behind the incident, reasoning after each one about what to ask next,
    and (re)searching policy if a new facet appears. Ends by advancing to actions.
-5. ``actions`` — a grounded Q&A loop that establishes, policy by policy, what
-   action each required and its disposition (done correctly / omission /
-   commission), reasoning after each about what to confirm next. Intake finishes
-   only once every added policy has a recorded action.
+5. ``actions`` — a grounded Q&A loop that establishes, requirement by requirement,
+   what action each plan item requires and its disposition (done correctly /
+   omission / commission), reasoning after each about what to confirm next. Intake
+   finishes only once every ``action`` plan item has a recorded action.
 
 The stage is tracked in ``ReportingState.phase`` so each new user message resumes
 the correct loop, and so a tool loop returns to the loop it came from.
 """
 
+import functools
+import inspect
+from collections.abc import Callable
+from typing import Any
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from opentelemetry import trace
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -48,11 +56,19 @@ from CareAI.agents.reporting.prompts import (
     REQUIRED_BASICS,
 )
 from CareAI.agents.reporting.state import ReportingState
-from CareAI.agents.reporting.tools import build_reporting_tools, covered_policy_ids
+from CareAI.agents.reporting.tools import (
+    build_reporting_tools,
+    satisfied_plan_item_ids,
+)
 from CareAI.database.policy import PolicyService
 from CareAI.models import ReportInfo
 
 _INTAKE_SYSTEM = SystemMessage(INTAKE_INSTRUCTIONS)
+
+# Tracer for per-stage agent spans. Resolves to a no-op provider unless the app
+# configures OpenTelemetry (see CareAI.telemetry), so the agent carries no hard
+# dependency on tracing being enabled.
+_tracer = trace.get_tracer(__name__)
 
 # Cap on autonomous policy-discovery turns. Each turn is one model call plus its
 # tool round, so this also keeps us clear of the graph recursion limit.
@@ -96,28 +112,37 @@ def _format_policies(policies: list[dict]) -> str:
 
 
 def _format_plan(plan: list[dict], kind: str) -> str:
-    """Render the plan items of one kind (``factor``/``action``) as bullets."""
+    """Render the plan items of one kind (``factor``/``action``) as bullets.
+
+    Each bullet leads with the item id (what the recording tools pass in
+    ``satisfies``) and the policies it consolidates.
+    """
     items = [i for i in plan if i.get("kind") == kind]
     if not items:
         return "(none)"
     return "\n".join(
-        f"- ({i['policy_id']}) {i['topic']} — {i['rationale']}" for i in items
+        f"- [{i.get('id', '?')}] ({', '.join(i.get('policy_ids', []))}) "
+        f"{i['topic']} — {i['rationale']}"
+        for i in items
     )
 
 
 def _deep_dive_context(state: ReportingState) -> str:
     """Build the shared context for the factors and actions loops.
 
-    Surfaces the basics, the added policies, the intake plan split by kind, what
-    has been recorded so far, and which policies still lack a recorded action —
-    so the loop can reason about what to ask next and know when it is done.
+    Surfaces the basics, the added policies, the plan items *still* to work
+    through (those not yet satisfied by a recorded item), what has been recorded
+    so far, and which action items remain unassessed — so the loop asks only what
+    is left and knows when it is done.
     """
     info = state.get("report_info", {})
     policies = state.get("policies", [])
     plan = state.get("plan", [])
     factors = state.get("factors", [])
     actions = state.get("actions", [])
-    uncovered = sorted({p["id"] for p in policies} - covered_policy_ids(actions))
+    satisfied = satisfied_plan_item_ids(factors, actions)
+    remaining = [p for p in plan if p.get("id") not in satisfied]
+    unmet_actions = [p["id"] for p in remaining if p.get("kind") == "action"]
     recorded_factors = "\n".join(f"- {f['description']}" for f in factors) or "(none)"
     recorded_actions = (
         "\n".join(
@@ -128,11 +153,13 @@ def _deep_dive_context(state: ReportingState) -> str:
     return (
         f"\n\nIncident basics:\n{_format_info(info)}"
         f"\n\nPolicies on file:\n{_format_policies(policies)}"
-        f"\n\nPlan — contributing factors to explore:\n{_format_plan(plan, 'factor')}"
-        f"\n\nPlan — actions to verify:\n{_format_plan(plan, 'action')}"
+        f"\n\nPlan — contributing factors still to explore:"
+        f"\n{_format_plan(remaining, 'factor')}"
+        f"\n\nPlan — actions still to verify:\n{_format_plan(remaining, 'action')}"
         f"\n\nContributing factors recorded so far:\n{recorded_factors}"
         f"\n\nActions recorded so far:\n{recorded_actions}"
-        f"\n\nAdded policies still without a recorded action: {uncovered or 'none'}"
+        f"\n\nAction items still unassessed (intake cannot finish until each has a "
+        f"recorded action): {unmet_actions or 'none'}"
     )
 
 
@@ -140,6 +167,58 @@ def _has_tool_calls(state: ReportingState) -> bool:
     """Return ``True`` if the last message carries tool calls to execute."""
     last = state["messages"][-1]
     return bool(getattr(last, "tool_calls", None))
+
+
+def _span_attributes(state: ReportingState) -> dict[str, Any]:
+    """Structural, PHI-free attributes describing a stage's incoming state."""
+    return {
+        "careai.phase": state.get("phase", PHASE_BASICS),
+        "careai.policies": len(state.get("policies", [])),
+        "careai.factors": len(state.get("factors", [])),
+        "careai.actions": len(state.get("actions", [])),
+        "careai.discover_rounds": state.get("discover_rounds", 0),
+    }
+
+
+def _traced_node(
+    name: str, fn: Callable[[ReportingState], Any]
+) -> Callable[[ReportingState], Any]:
+    """Wrap a graph node so each invocation opens a ``reporting.<name>`` span.
+
+    Spans record only structural attributes (phase, item counts) — never message
+    content or PHI. Handles both sync and async node callables.
+
+    Args:
+        name (str): The node name, used as the span name suffix.
+        fn (Callable): The node function to wrap.
+
+    Returns:
+        Callable: The wrapped node, preserving the original's call signature.
+    """
+    span_name = f"reporting.{name}"
+
+    def _finish(span: trace.Span, result: Any) -> Any:
+        if isinstance(result, dict) and "phase" in result:
+            span.set_attribute("careai.next_phase", result["phase"])
+        return result
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def awrapped(state: ReportingState) -> Any:
+            with _tracer.start_as_current_span(span_name) as span:
+                span.set_attributes(_span_attributes(state))
+                return _finish(span, await fn(state))
+
+        return awrapped
+
+    @functools.wraps(fn)
+    def wrapped(state: ReportingState) -> Any:
+        with _tracer.start_as_current_span(span_name) as span:
+            span.set_attributes(_span_attributes(state))
+            return _finish(span, fn(state))
+
+    return wrapped
 
 
 def build_reporting_agent(
@@ -168,12 +247,17 @@ def build_reporting_agent(
     discover_model = model.bind_tools(
         [by_name["search_policies"], by_name["add_policy"]]
     )
+    # Both deep-dive stages can record factors AND actions. The stage sets the
+    # questioning emphasis (why-first, then actions) via its prompt, but either
+    # can capture whatever the practitioner volunteers to the bucket it belongs
+    # in — so an action mentioned mid-factors isn't dropped or re-asked later.
     factors_model = model.bind_tools(
         [
             by_name["search_policies"],
             by_name["add_policy"],
             by_name["search_incidents"],
             by_name["record_contributing_factor"],
+            by_name["record_action"],
             by_name["record_report_info"],
             by_name["advance_to_actions"],
         ]
@@ -184,6 +268,7 @@ def build_reporting_agent(
             by_name["add_policy"],
             by_name["search_incidents"],
             by_name["record_action"],
+            by_name["record_contributing_factor"],
             by_name["record_report_info"],
             by_name["finish_report"],
         ]
@@ -266,7 +351,17 @@ def build_reporting_agent(
         drafted = await model.with_structured_output(IntakePlan).ainvoke(
             [system, HumanMessage("Draft the intake plan now.")]
         )
-        items = [item.model_dump() for item in drafted.items]
+        # Assign stable, kind-scoped ids in code (factor-1, action-1, …) rather
+        # than trusting the model to — the recording tools reference these via
+        # `satisfies` to mark an item addressed and to gate completeness.
+        items: list[dict] = []
+        counters = {"factor": 0, "action": 0}
+        for item in drafted.items:
+            data = item.model_dump()
+            kind = data.get("kind", "factor")
+            counters[kind] += 1
+            data["id"] = f"{kind}-{counters[kind]}"
+            items.append(data)
         # The plan stays internal — it steers the factors/actions prompts via
         # state and is never shown to the practitioner.
         return {"plan": items, "phase": PHASE_FACTORS}
@@ -307,15 +402,17 @@ def build_reporting_agent(
         """Return to the loop that called the tools (phase set in state)."""
         return _TOOLS_NODE.get(state.get("phase", PHASE_DISCOVER), "factors")
 
+    # Each reasoning node is wrapped in a PHI-free span; the ToolNode executes
+    # under whichever stage span called it.
     builder = StateGraph(ReportingState)
-    builder.add_node("extract_basics", extract_basics)
-    builder.add_node("ask_basics", ask_basics)
-    builder.add_node("discover", discover)
-    builder.add_node("plan", plan)
-    builder.add_node("factors", factors)
-    builder.add_node("actions", actions)
+    builder.add_node("extract_basics", _traced_node("extract_basics", extract_basics))
+    builder.add_node("ask_basics", _traced_node("ask_basics", ask_basics))
+    builder.add_node("discover", _traced_node("discover", discover))
+    builder.add_node("plan", _traced_node("plan", plan))
+    builder.add_node("factors", _traced_node("factors", factors))
+    builder.add_node("actions", _traced_node("actions", actions))
     builder.add_node("tools", ToolNode(tools))
-    builder.add_node("wrap_up", wrap_up)
+    builder.add_node("wrap_up", _traced_node("wrap_up", wrap_up))
 
     builder.add_conditional_edges(
         START,
