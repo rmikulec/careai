@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Seed the database on FIRST boot only (when pgdata is empty): the postgres
+      # entrypoint runs any *.sql.gz in this dir. db/seed.sql.gz ships the compiled
+      # policy corpus (embeddings included) plus a few example reports/threads, so
+      # the stack comes up populated without re-ingesting. Reset with `down -v`.
+      - ./db/seed.sql.gz:/docker-entrypoint-initdb.d/seed.sql.gz:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U florence -d florence"]
       interval: 5s

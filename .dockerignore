@@ -6,10 +6,12 @@ venv/
 .env
 
 # Not needed at runtime — dev-only corpus generation, notebooks, docs, fixtures.
+# db/ holds the seed dump, loaded by the db service via a bind mount, not the image.
 policy_corpus/
 notebooks/
 design-docs/
 tests/
+db/
 
 # Python caches / build artifacts
 __pycache__/

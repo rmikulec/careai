@@ -60,12 +60,18 @@ The whole stack runs from one compose file. You need Docker and an OpenAI key.
    docker compose up --build
    ```
 
-   The `migrate` service creates the schema (and the `pgvector` extension) before the API
-   starts, so the first boot takes a moment. Add `-d` to run detached.
+   The database comes **pre-seeded**: on its first boot it restores `db/seed.sql.gz`, which holds
+   the whole compiled policy corpus (all 67 policies, embeddings included) plus a few example
+   reports and their conversations. So the stack comes up ready — no re-ingesting, and you don't
+   need an OpenAI key just to explore what's there. Add `-d` to run detached.
 
-3. Before filing a report, the policy library needs to be populated. Upload policy PDFs
-   (for example the ones in `policy_corpus/documents/`) through `POST /api/v1/policies/upload` — easiest from
-   the API docs page below — with the header `X-API-Key: dev-local-key`.
+   To start from an empty database instead, reset the volume with `docker compose down -v` and
+   bring it back up; then upload your own policy PDFs (for example the ones in
+   `policy_corpus/documents/`) through `POST /api/v1/policies/upload` — easiest from the API docs
+   page below — with the header `X-API-Key: dev-local-key`.
+
+> Note: filing a *new* report still calls OpenAI (to embed the search query and run the agents),
+> so the key in step 1 is needed for a live conversation — just not to load the policy corpus.
 
 Once it is up, these URLs are available:
 
