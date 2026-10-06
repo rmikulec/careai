@@ -77,7 +77,7 @@ Once it is up, these URLs are available:
 
 | URL | Service | Notes |
 |---|---|---|
-| http://localhost:8501 | Streamlit UI | The demo. Chat on the left, the report / severity / drafted notifications on the right. Sends the API key for you. |
+| http://localhost:8501 | Streamlit UI | The demo. Chat on the left, the report / severity / drafted notifications on the right. The seeded example reports show in the **Report history** sidebar — click one to open its report, severity, and notifications. Sends the API key for you. |
 | http://localhost:8000 | API (FastAPI) | All `/api/v1/*` routes need the header `X-API-Key: dev-local-key`. |
 | http://localhost:8000/docs | API docs | Interactive Swagger UI — the simplest way to upload policies and poke endpoints. |
 | http://localhost:8000/health | Health check | Unauthenticated liveness probe. |
