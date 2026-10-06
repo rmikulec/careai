@@ -1,8 +1,9 @@
 """Generate a corpus of realistic hospital policy PDFs for testing.
 
 This script builds a set of formal, multi-section hospital policy documents and
-renders each to a PDF under ``assets/``. The documents are *test fixtures* for
-the Incident Reporting Agent: their prose deliberately carries the kind of facts
+renders each to a PDF under ``policy_corpus/documents/``. The documents are
+*test fixtures* for the Incident Reporting Agent: their prose deliberately
+carries the kind of facts
 the agent must retrieve and reason over — severity criteria, time-bound
 notification deadlines, required immediate actions, and documentation fields.
 
@@ -13,7 +14,7 @@ NPIAP staging, EMTALA, etc.) are real so retrieval and grounding behave against
 plausible content.
 
 Run:
-    python scripts/generate_policy_corpus.py
+    python policy_corpus/generators/generate_policy_corpus.py
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ from policy_content import build_corpus
 
 logger = logging.getLogger(__name__)
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+DOCUMENTS_DIR = Path(__file__).resolve().parent.parent / "documents"
 
 
 # --------------------------------------------------------------------------- #
@@ -384,7 +385,7 @@ def render(doc: PolicyDoc, out_dir: Path) -> tuple[Path, int]:
 
 
 def _write_index(rows: list[tuple[PolicyDoc, str, int]]) -> None:
-    """Write assets/README.md: an auto-generated index of the whole corpus."""
+    """Write the documents/README.md: an auto-generated index of the corpus."""
     lines = [
         "# Policy Corpus (test fixtures)",
         "",
@@ -405,7 +406,7 @@ def _write_index(rows: list[tuple[PolicyDoc, str, int]]) -> None:
         "Regenerate with:",
         "",
         "```bash",
-        "python scripts/generate_policy_corpus.py",
+        "python policy_corpus/generators/generate_policy_corpus.py",
         "```",
         "",
         f"**{len(rows)} policies.** Index below is auto-generated on each run.",
@@ -418,26 +419,26 @@ def _write_index(rows: list[tuple[PolicyDoc, str, int]]) -> None:
         owner = doc.owner.replace("|", "/")
         lines.append(f"| {doc.number} | {title} | {owner} | {pages} | `{filename}` |")
     lines.append("")
-    (ASSETS_DIR / "README.md").write_text("\n".join(lines), encoding="utf-8")
+    (DOCUMENTS_DIR / "README.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
     corpus = build_corpus()
     rows: list[tuple[PolicyDoc, str, int]] = []
     total_pages = 0
     for policy in corpus:
-        path, pages = render(policy, ASSETS_DIR)
+        path, pages = render(policy, DOCUMENTS_DIR)
         rows.append((policy, path.name, pages))
         total_pages += pages
-        logger.info("wrote %s (%d pp)", path.relative_to(ASSETS_DIR.parent), pages)
+        logger.info("wrote %s (%d pp)", path.relative_to(DOCUMENTS_DIR.parent), pages)
     _write_index(rows)
     logger.info(
         "\n%d policy PDFs (%d pages) written to %s/ + README.md index",
         len(rows),
         total_pages,
-        ASSETS_DIR.name,
+        DOCUMENTS_DIR.name,
     )
 
 

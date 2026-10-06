@@ -7,7 +7,7 @@ Every policy shares one severity scale — **SEV-1 / SEV-2 / SEV-3 / Near Miss**
 Regenerate with:
 
 ```bash
-python scripts/generate_policy_corpus.py
+python policy_corpus/generators/generate_policy_corpus.py
 ```
 
 **67 policies.** Index below is auto-generated on each run.

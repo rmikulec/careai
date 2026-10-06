@@ -56,7 +56,7 @@ dev = [
     "coverage>=7.10.0",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.1.0",
-    "reportlab>=5.0.0",  # generates the policy-corpus PDF fixtures in assets/
+    "reportlab>=5.0.0",  # generates the policy-corpus PDF fixtures in policy_corpus/documents/
 ]
 
 [tool.hatch.build.targets.wheel]

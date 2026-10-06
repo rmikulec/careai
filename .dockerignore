@@ -6,10 +6,9 @@ venv/
 .env
 
 # Not needed at runtime — dev-only corpus generation, notebooks, docs, fixtures.
-scripts/
+policy_corpus/
 notebooks/
 design-docs/
-assets/
 tests/
 
 # Python caches / build artifacts
