@@ -235,38 +235,3 @@ The SSE stream emits incremental `token` text from the user-facing stages, plus
 **human-readable `tool`** events ("Searching policies for '…'", "Adding policy
 POL-EH-001") so the UI can show what the agent is doing — especially during the
 otherwise-silent discovery stage.
-
-## Built vs. planned
-
-**Built:** policy ingestion + pgvector RAG; the four-stage agent; code-enforced
-chunk grounding; action dispositions; the deterministic completeness gate; the
-policy-grounded **escalation (severity) agent** with policy-grounded
-**notification drafting** into a `notifications` queue; the reporting + policies
-API with API-key auth, CORS, and SSE streaming; the Streamlit UI.
-
-**Planned / not yet built:**
-
-- **Role-based access** (employee sees own reports; manager sees all, plus past
-  incidents and procedure gaps) — enforced at the store layer, not the prompt.
-- **Notification delivery** — a worker that drains the `notifications` queue and
-  actually sends each (email/page/…), plus the deadlines (who-by-when) parsed
-  from the cited policy prose. Drafting into the queue is built; delivery is not.
-- **Review pass** — deterministic checks (Pydantic validity, every citation points
-  at a real chunk — already enforced at record time) plus one LLM pass (narrative
-  vs. recorded data, policy conflicts) that decides when a human must review.
-- **Audit logging** (append-only who/what/when, identifiers only — no PHI).
-- **Past-incident RAG** — `search_incidents` is a mock today; the real
-  de-identified corpus is a separate feature.
-
-## Open questions
-
-- **De-identification for the incidents corpus.** Deterministic PII stripping
-  (regex/NER) vs. an LLM redaction pass, when past-incident RAG lands.
-- **Do we need severity at all** given the omission/commission dispositions, or is
-  severity better derived from the dispositions + policy deadlines?
-- **Discovery cap tuning.** Is a fixed round cap right, or should discovery stop on
-  a "no new policies" signal with the cap only as a backstop?
-- **Abandoned / partial intake.** A thread can stop mid-flow; how does a partial
-  report get surfaced for human follow-up?
-- **Human review outcome.** Approve/reject only, or edit-and-re-check — and does an
-  edit re-enter review?
