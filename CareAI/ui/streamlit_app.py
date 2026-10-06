@@ -2,27 +2,31 @@
 
 A thin client: it POSTs practitioner messages to the API's reporting endpoints,
 streams the agent's reply via Server-Sent Events, and renders the report items
-collected so far in a sidebar. It imports nothing from the agent or the database
-— all state lives server-side, keyed by the ``thread_id`` held in the Streamlit
-session.
+collected so far alongside the conversation. Once a thread finalizes, it surfaces
+the escalation agent's policy-grounded severity (level, rationale, and source
+citations) as a banner above the report. It imports nothing from the agent or the
+database — all state lives server-side, keyed by the ``thread_id`` held in the
+Streamlit session.
 
 Run with ``streamlit run CareAI/ui/streamlit_app.py`` (or ``uv run task ui``).
-Configuration is read from the environment:
+Configuration comes from the shared settings tree (:mod:`CareAI.config`):
 
 - ``CAREAI_API_URL`` — base URL of the API (default ``http://localhost:8000``).
 - ``CAREAI_API_KEY`` — value sent as the ``X-API-Key`` header.
 """
 
 import json
-import os
 import uuid
 from collections.abc import Iterator
 
 import httpx
 import streamlit as st
 
-_API_URL = os.environ.get("CAREAI_API_URL", "http://localhost:8000").rstrip("/")
-_API_KEY = os.environ.get("CAREAI_API_KEY", "dev-local-key")
+from CareAI.config import get_settings
+
+_settings = get_settings()
+_API_URL = _settings.careai_api_url.rstrip("/")
+_API_KEY = _settings.careai_api_key
 _HEADERS = {"X-API-Key": _API_KEY}
 
 # No read timeout: a single agent turn can take a while to stream. Connect/write
@@ -135,6 +139,33 @@ def _fetch_report(thread_id: str) -> dict | None:
     return response.json()
 
 
+def _fetch_finalized_report(thread_id: str) -> dict | None:
+    """Fetch the finalized report (with severity/escalation), or ``None``.
+
+    The finalized :class:`IncidentReport` is written once intake reaches the
+    ``done`` phase and then enriched with the escalation agent's severity
+    assessment. Returns ``None`` while the thread is still in progress (HTTP 404)
+    or the API is unreachable.
+
+    Args:
+        thread_id (str): The conversation to inspect.
+
+    Returns:
+        Optional[dict]: The finalized report payload, or ``None`` if not yet
+        finalized / unreachable.
+    """
+    try:
+        response = httpx.get(
+            _reporting_url(thread_id, "/report"), headers=_HEADERS, timeout=10.0
+        )
+    except httpx.RequestError:
+        return None
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
 def _fetch_threads() -> list[dict]:
     """Fetch every reporting thread (finalized or in progress), newest first.
 
@@ -187,6 +218,69 @@ def _render_policy_links(links: list[dict]) -> None:
             content = link.get("content")
             if content:
                 st.caption(f"> {content}")
+
+
+def _severity_tone(severity: str | None) -> tuple[str, str]:
+    """Pick a Streamlit alert tone + icon for a policy-defined severity label.
+
+    Heuristic only: the severity *scale* belongs to the facility's policies, so
+    this keys off common cues (sentinel/catastrophic/level-1 = most urgent) and
+    degrades to an informational tone for anything it doesn't recognize. An
+    unknown/undetermined severity is treated as "needs attention".
+
+    Args:
+        severity (Optional[str]): The policy's own severity label (e.g. "SEV-2"),
+            or ``None`` when the policies defined no applicable criteria.
+
+    Returns:
+        tuple[str, str]: The alert tone (``error``/``warning``/``info``) and an
+        icon to show beside it.
+    """
+    if not severity:
+        return "warning", "⚠️"
+    text = severity.lower()
+    if any(k in text for k in ("sev-1", "sev 1", "catastroph", "sentinel", "death")):
+        return "error", "🚨"
+    if any(k in text for k in ("sev-2", "sev 2", "major", "severe")):
+        return "warning", "⚠️"
+    return "info", "ℹ️"
+
+
+def _render_severity(finalized: dict | None) -> None:
+    """Render the policy-grounded severity banner for a finalized report.
+
+    No-op until the thread is finalized and the escalation agent has run (so
+    nothing shows mid-intake, and nothing shows if the assessment failed).
+    """
+    escalation = (finalized or {}).get("escalation") or {}
+    if not escalation:
+        return
+    severity = (finalized or {}).get("severity") or escalation.get("severity")
+    tone, icon = _severity_tone(severity)
+    banner = {"error": st.error, "warning": st.warning, "info": st.info}[tone]
+    if severity:
+        banner(f"Severity: {severity}", icon=icon)
+    else:
+        banner(
+            "Severity not determined from the linked policies — flagged for "
+            "human triage.",
+            icon=icon,
+        )
+
+    rationale = escalation.get("rationale")
+    if rationale:
+        st.caption(rationale)
+
+    sources = escalation.get("sources") or []
+    if sources:
+        label = f"{len(sources)} policy citation" + ("" if len(sources) == 1 else "s")
+        with st.expander(f"Why this severity · {label}", expanded=False):
+            for src in sources:
+                st.caption(
+                    f"**{src.get('policy_id', '?')}** · chunk "
+                    f"{src.get('chunk', '?')} — {src.get('reason', '')}"
+                )
+    st.divider()
 
 
 def _render_report(report: dict | None) -> None:
@@ -379,13 +473,18 @@ def main() -> None:
 
     _render_sidebar()
 
-    # Fetched after the turn so the right panel reflects this turn's items.
+    # Fetched after the turn so the right panel reflects this turn's items. The
+    # finalized report (with the escalation agent's severity) exists only once
+    # intake is done; until then it is None and the severity banner stays hidden.
     report = _fetch_report(st.session_state.thread_id)
+    finalized = _fetch_finalized_report(st.session_state.thread_id)
 
     with report_col:
         st.subheader("Report")
         with st.container(height=_PANEL_HEIGHT):
+            _render_severity(finalized)
             _render_report(report)
 
 
-main()
+if __name__ == "__main__":
+    main()
