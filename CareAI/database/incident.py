@@ -106,8 +106,8 @@ class IncidentService:
 
         Returns:
             list[dict]: One dict per report with ``thread_id``, ``report_id``,
-            ``status``, ``incident_type``, ``summary``, and ``updated_at`` (ISO
-            string) — enough to list and open a past report.
+            ``status``, ``severity``, ``incident_type``, ``summary``, and
+            ``updated_at`` (ISO string) — enough to list and open a past report.
         """
         stmt = (
             select(
@@ -130,6 +130,7 @@ class IncidentService:
                     "thread_id": row.thread_id,
                     "report_id": row.report_id,
                     "status": row.status,
+                    "severity": report.get("severity"),
                     "incident_type": report.get("incident_type"),
                     "summary": report.get("summary"),
                     "updated_at": (

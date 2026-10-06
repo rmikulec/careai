@@ -4,6 +4,7 @@ from CareAI.models.incident_report import (
     ActionDisposition,
     ActionTaken,
     ContributingFactor,
+    EscalationAssessment,
     IncidentReport,
     Person,
     PolicyLink,
@@ -19,5 +20,6 @@ __all__ = [
     "ActionDisposition",
     "ActionTaken",
     "ContributingFactor",
+    "EscalationAssessment",
     "IncidentReport",
 ]

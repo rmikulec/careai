@@ -94,6 +94,43 @@ class ContributingFactor(BaseModel):
     )
 
 
+class EscalationAssessment(BaseModel):
+    """A policy-grounded severity assessment of a finalized incident.
+
+    Produced by the escalation agent after intake finishes: it reads the report
+    and the full text of the policies already linked to it, applies the
+    severity/escalation criteria those policies define, and records the resulting
+    level with its reasoning and citations. The severity *scale* is whatever the
+    facility's policies specify (e.g. the SEV-1..SEV-3 / Near Miss scale in
+    POL-RM-013) — never a scale imposed by this system.
+
+    Attributes:
+        severity (Optional[str]): The severity level using the policies' own
+            labels (e.g. ``"SEV-2"``), or ``None`` when the linked policies
+            define no applicable severity criteria — the report is then left for
+            human triage rather than given an invented level.
+        rationale (str): Why this level, grounded in the cited policy criteria.
+        sources (list[PolicyLink]): Citations to the policy chunks the assessment
+            relied on, each a policy id, chunk index, and reason.
+    """
+
+    severity: str | None = Field(
+        default=None,
+        description=(
+            "Severity level using the facility policies' own labels (e.g. "
+            "'SEV-2'), or null if the linked policies specify no applicable "
+            "severity criteria. Never invent a scale."
+        ),
+    )
+    rationale: str = Field(
+        description="Why this level, grounded in the cited policy criteria."
+    )
+    sources: list[PolicyLink] = Field(
+        default_factory=list,
+        description="Citations to the policy chunks the assessment relied on.",
+    )
+
+
 class IncidentReport(BaseModel):
     """A structured incident report assembled from gathered info and recorded items."""
 
@@ -102,6 +139,7 @@ class IncidentReport(BaseModel):
     reported_at: str
     status: Literal["collecting", "partial", "complete"] = "collecting"
     severity: str | None = None
+    escalation: EscalationAssessment | None = None
     incident_type: str | None = None
     occurred_at: str | None = None
     location: str | None = None

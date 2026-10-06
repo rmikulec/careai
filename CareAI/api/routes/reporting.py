@@ -14,8 +14,10 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from CareAI.agents.escalation import assess_severity
 from CareAI.agents.reporting.prompts import PHASE_DONE
 from CareAI.api.dependencies import (
+    get_escalation_agent,
     get_incident_service,
     get_reporting_agent,
     require_api_key,
@@ -95,23 +97,40 @@ async def _persist_if_done(
     thread_id: str,
     state: dict,
     incident_service: IncidentService,
+    escalation_agent: CompiledStateGraph,
 ) -> None:
-    """Assemble and store the finalized report once intake reaches ``done``.
+    """Assemble, store, and severity-assess the report once intake reaches ``done``.
 
     Called after each turn: when the agent has advanced the thread to the
     ``done`` phase, the collected state is assembled into an
-    :class:`IncidentReport` and upserted into the incident store. A no-op for
-    any earlier phase.
+    :class:`IncidentReport` and upserted into the incident store. The escalation
+    agent then assesses the report's severity — grounded in the policies linked
+    during intake — and the enriched report is re-stored. A no-op for any earlier
+    phase.
+
+    Severity assessment is best-effort: it runs only after the finalized report
+    has been persisted, so a failure is logged and leaves the finalized report
+    intact (without a severity) rather than failing the turn.
 
     Args:
         thread_id (str): The reporting thread.
         state (dict): The agent's graph state after the turn.
         incident_service (IncidentService): The finalized-incident store.
+        escalation_agent (CompiledStateGraph): The compiled escalation agent.
     """
     if state.get("phase") != PHASE_DONE:
         return
     report = IncidentReport.from_graph_state(thread_id, state)
     await incident_service.save(thread_id, report)
+    try:
+        assessment = await assess_severity(escalation_agent, report)
+    except Exception:
+        logger.exception("Severity assessment failed for thread %r", thread_id)
+        return
+    enriched = report.model_copy(
+        update={"escalation": assessment, "severity": assessment.severity}
+    )
+    await incident_service.save(thread_id, enriched)
 
 
 class MessageRequest(BaseModel):
@@ -161,6 +180,7 @@ class ReportHistoryItem(BaseModel):
         thread_id (str): The thread it was assembled from; open it to view.
         report_id (str): The report's own identifier.
         status (str): Lifecycle status at write time.
+        severity (Optional[str]): Policy-grounded severity, once assessed.
         incident_type (Optional[str]): Incident type, if captured.
         summary (Optional[str]): One-line summary, if captured.
         updated_at (Optional[str]): ISO timestamp of the last write.
@@ -169,6 +189,7 @@ class ReportHistoryItem(BaseModel):
     thread_id: str
     report_id: str
     status: str
+    severity: str | None = None
     incident_type: str | None = None
     summary: str | None = None
     updated_at: str | None = None
@@ -230,15 +251,17 @@ def build_reporting_router() -> APIRouter:
         body: MessageRequest,
         agent: CompiledStateGraph = Depends(get_reporting_agent),
         incident_service: IncidentService = Depends(get_incident_service),
+        escalation_agent: CompiledStateGraph = Depends(get_escalation_agent),
     ) -> MessageResponse:
         """Send a practitioner message and return the agent's reply.
 
         If the turn completes intake (phase ``done``), the finalized report is
-        assembled from state and stored before the reply is returned.
+        assembled from state, stored, and severity-assessed before the reply is
+        returned.
         """
         config = {"configurable": {"thread_id": thread_id}}
         result = await agent.ainvoke({"messages": [HumanMessage(body.message)]}, config)
-        await _persist_if_done(thread_id, result, incident_service)
+        await _persist_if_done(thread_id, result, incident_service, escalation_agent)
         return MessageResponse(thread_id=thread_id, reply=result["messages"][-1].text)
 
     @router.post("/threads/{thread_id}/stream")
@@ -247,6 +270,7 @@ def build_reporting_router() -> APIRouter:
         body: MessageRequest,
         agent: CompiledStateGraph = Depends(get_reporting_agent),
         incident_service: IncidentService = Depends(get_incident_service),
+        escalation_agent: CompiledStateGraph = Depends(get_escalation_agent),
     ) -> StreamingResponse:
         """Stream the agent's turn as Server-Sent Events.
 
@@ -308,7 +332,9 @@ def build_reporting_router() -> APIRouter:
             # Once the stream ends, persist the finalized report if the turn
             # completed intake. Read the settled state from the checkpointer.
             snapshot = await agent.aget_state(config)
-            await _persist_if_done(thread_id, snapshot.values, incident_service)
+            await _persist_if_done(
+                thread_id, snapshot.values, incident_service, escalation_agent
+            )
             yield _sse("done", {"thread_id": thread_id})
 
         return StreamingResponse(
