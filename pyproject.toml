@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "florence-health"
+version = "0.1.0"
+description = "Backend API hosting AI features for clinical healthcare"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Ryan Mikulec", email = "rmikulec.dev@gmail.com" }]
+license = { text = "MIT" }
+
+dependencies = [
+    # Web
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "gunicorn>=23.0.0",
+    # Config & models
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.6.0",
+    # Database (async)
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "aiosqlite>=0.20.0", # local/dev + tests
+    "alembic>=1.14.0",
+    "pgvector>=0.3.6",
+    # LLM
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=1.0",
+    # Graph-state persistence: LangGraph's Postgres checkpointer runs over
+    # psycopg (v3), separate from the asyncpg/SQLAlchemy pool used elsewhere.
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary,pool]>=3.2.0",
+    # Logging
+    "colorlog>=6.9.0",
+    # Observability (self-hosted OTEL; no PHI leaves the boundary)
+    "opentelemetry-sdk>=1.29.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.29.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.50b0",
+    "dotenv>=0.9.9",
+    "pypdf>=6.19.0",
+    "langchain-text-splitters>=1.1.3",
+    "python-multipart>=0.0.32",
+    # UI
+    "streamlit>=1.40.0",
+    "httpx>=0.28.0",  # Streamlit UI's HTTP client (also the async test client)
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "flake8>=7.3.0",
+    "coverage>=7.10.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.1.0",
+    "reportlab>=5.0.0",  # generates the policy-corpus PDF fixtures in assets/
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["CareAI"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.taskipy.tasks]
+dev = "uvicorn CareAI.api.app:app --reload --host 0.0.0.0 --port 8000"
+start = "gunicorn CareAI.api.app:app -k uvicorn.workers.UvicornWorker -c gunicorn.conf.py"
+ui = "streamlit run CareAI/ui/streamlit_app.py"
+test = "coverage run -m pytest && coverage report"
+lint = "flake8 CareAI tests"
+fmt = "black CareAI tests"
+migrate = "alembic upgrade head"
+makemigration = "alembic revision --autogenerate -m"

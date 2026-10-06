@@ -1,0 +1,99 @@
+# Local/dev stack: Postgres (with pgvector) + the API + pgAdmin. Not a production
+# manifest — secrets here are throwaway dev values.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: florence
+      POSTGRES_PASSWORD: florence
+      POSTGRES_DB: florence
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U florence -d florence"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot job: create the schema (+ pgvector extension) before the API starts.
+  # Alembic isn't set up yet, so we use the create_all() dev-bootstrap documented
+  # in CareAI/database/session.py. Swap to `alembic upgrade head` once migrations
+  # exist.
+  migrate:
+    build: .
+    command:
+      - python
+      - -c
+      - "import asyncio; from CareAI.database.session import create_all; asyncio.run(create_all())"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://florence:florence@db:5432/florence
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      ENVIRONMENT: development
+      # The app reads DATABASE_URL (CareAI/database/session.py), not discrete DB_* vars.
+      DATABASE_URL: postgresql+asyncpg://florence:florence@db:5432/florence
+      API_KEYS: dev-local-key
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Streamlit chat UI for the reporting agent. Reuses the same image as the API
+  # (just a different command); talks to the API over HTTP inside the network.
+  streamlit:
+    build: .
+    command:
+      - streamlit
+      - run
+      - CareAI/ui/streamlit_app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+    environment:
+      CAREAI_API_URL: http://api:8000
+      CAREAI_API_KEY: dev-local-key
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Web UI for inspecting the Postgres/pgvector data. The CareAI server is
+  # pre-registered via servers.json; connect with password "florence".
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@florence.local
+      PGADMIN_DEFAULT_PASSWORD: florence
+      # Desktop mode: skip the pgAdmin login screen for local dev.
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  pgadmin-data:

@@ -1,0 +1,34 @@
+# Keep the build context small and the image clean. Critically excludes the local
+# .venv (built for a different interpreter) so it can't clobber the image's venv,
+# and .env so secrets never land in a layer.
+.venv/
+venv/
+.env
+
+# Not needed at runtime — dev-only corpus generation, notebooks, docs, fixtures.
+scripts/
+notebooks/
+design-docs/
+assets/
+tests/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# VCS / OS / editor
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/
