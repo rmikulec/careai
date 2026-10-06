@@ -33,6 +33,7 @@ async def create_all() -> None:
     from CareAI.database.base import Base
     from CareAI.database import policy  # noqa: F401  (registers PolicyChunk)
     from CareAI.database import incident  # noqa: F401  (registers IncidentRecord)
+    from CareAI.database import notification  # noqa: F401 (registers Notification)
 
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))

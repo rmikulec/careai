@@ -6,3 +6,4 @@ per-file-ignores =
     # wrap; black still enforces 88 for all actual code in these modules.
     CareAI/agents/reporting/prompts.py: E501
     CareAI/agents/reporting/tools.py: E501
+    CareAI/agents/escalation/tools.py: E501

@@ -15,7 +15,11 @@ from langchain.chat_models import init_chat_model
 
 from CareAI.agents.escalation import build_escalation_agent
 from CareAI.agents.reporting import build_reporting_agent
-from CareAI.api.dependencies import get_policy_service, get_settings
+from CareAI.api.dependencies import (
+    get_notification_service,
+    get_policy_service,
+    get_settings,
+)
 from CareAI.api.routes.policies import build_policies_router
 from CareAI.api.routes.reporting import build_reporting_router
 from CareAI.database import create_all
@@ -43,7 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.reporting_agent = build_reporting_agent(
             model, policy_service, checkpointer=checkpointer
         )
-        app.state.escalation_agent = build_escalation_agent(model, policy_service)
+        app.state.escalation_agent = build_escalation_agent(
+            model, policy_service, get_notification_service()
+        )
         yield
 
 

@@ -14,7 +14,7 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph.state import CompiledStateGraph
 
 from CareAI.config import Settings, get_settings
-from CareAI.database import IncidentService, PolicyService
+from CareAI.database import IncidentService, NotificationService, PolicyService
 from CareAI.ingestion import PolicyIngestor
 
 # Re-exported so routes and the app factory can depend on the one cached
@@ -32,6 +32,12 @@ def get_policy_service() -> PolicyService:
 def get_incident_service() -> IncidentService:
     """Return the cached finalized-incident store (singleton)."""
     return IncidentService()
+
+
+@lru_cache
+def get_notification_service() -> NotificationService:
+    """Return the cached notifications queue service (singleton)."""
+    return NotificationService()
 
 
 @lru_cache

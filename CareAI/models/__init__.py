@@ -11,6 +11,7 @@ from CareAI.models.incident_report import (
     ReportInfo,
     Role,
 )
+from CareAI.models.notification import Notification, NotificationChannel
 
 __all__ = [
     "Role",
@@ -22,4 +23,6 @@ __all__ = [
     "ContributingFactor",
     "EscalationAssessment",
     "IncidentReport",
+    "Notification",
+    "NotificationChannel",
 ]

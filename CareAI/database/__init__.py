@@ -2,6 +2,7 @@
 
 from CareAI.database.base import Base
 from CareAI.database.incident import IncidentRecord, IncidentService
+from CareAI.database.notification import NotificationRecord, NotificationService
 from CareAI.database.policy import EMBED_DIM, EMBED_MODEL, PolicyChunk, PolicyService
 from CareAI.database.session import DATABASE_URL, Session, create_all, engine
 
@@ -15,6 +16,8 @@ __all__ = [
     "PolicyService",
     "IncidentRecord",
     "IncidentService",
+    "NotificationRecord",
+    "NotificationService",
     "EMBED_DIM",
     "EMBED_MODEL",
 ]
