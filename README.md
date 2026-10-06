@@ -24,6 +24,34 @@ previous incidents, allowing it to know **what** to ask, and **when** to ask it.
    lead to a higher response rate, and gathering the correct data when needed. Rather than relying
    on blank text blocks and the practitioner's judgement on what is relevant.
 
+#### Agent Workflow
+The workflow is broken up into many different "Phases", each with access to a different set of tools
+and goals. The workflow is designed to fully understand the facility's policies, and based on that,
+get the most accurate and relevant information from the reporting physician.
+
+The Reporting Agent has access to a pre-chunked VectorDB containing all of the facility's policies.
+The agent can search these policies, and add any relevant ones to the report, to be used later.
+After reading these policies, it operates in two phases:
+  1. Contributing factors: Try to identify any factors that may have contributed to the incident. The
+  goal here is to make it easier for the reporter to get all of the relevant information down, with
+  little to no pressure. These questions are planned out based on the related policies, and / or
+  related past incidents.
+  2. Actions Taken: After getting the complete picture of the incident, the agent then tries to
+  identify what actions have been taken, directly linking the incident to specific policies.
+
+The finalized report is then sent to an Escalation Agent, which is a separate process to ensure no bias from the
+reporting agent's conversation. It is given the finalized report as well as relevant policies,
+and determines what severity level the incident is, grounded in multi-step reasoning, linked to
+specific policy sections. Based on this severity level, the escalation agent can then draft
+notifications to be sent.
+
+In order to ensure the best results, both agents are grounded in guidelines defined as "Just Culture". [2]
+The goal of that framework is to create an open space for reporting, in order to gain the most accurate
+and complete report to prevent future incidents.
+
+The full stage-by-stage design — the grounding model, the completeness gate, and the escalation
+subagent — is written up in the incident reporting design doc. [3]
+
 ### Architecture
 
 This will be a multi-agent workflow engine, deployed in the cloud, and working alongside a managed
@@ -81,39 +109,11 @@ Once it is up, these URLs are available:
 | http://localhost:8000 | API (FastAPI) | All `/api/v1/*` routes need the header `X-API-Key: dev-local-key`. |
 | http://localhost:8000/docs | API docs | Interactive Swagger UI — the simplest way to upload policies and poke endpoints. |
 | http://localhost:8000/health | Health check | Unauthenticated liveness probe. |
-| http://localhost:3000 | Grafana (traces) | OpenTelemetry traces via the bundled `otel-lgtm` image; the Tempo datasource is pre-wired. Spans carry no PHI. Dev only, in-memory. |
+| http://localhost:16686 | Jaeger (traces) | OpenTelemetry trace explorer; the API exports spans here over OTLP. Spans carry no PHI. Dev only, in-memory. |
 | http://localhost:5050 | pgAdmin | Inspect the database. The CareAI server is pre-registered; connect with password `florence`. |
 | localhost:5432 | Postgres (pgvector) | Direct DB access if you want it: user / password / db are all `florence`. |
 
 All credentials here are throwaway local-dev values — this is not a production manifest.
-
-### Agent Workflow
-The workflow is broken up into many different "Phases", each with access to a different set of tools
-and goals. The workflow is designed to fully understand the facility's policies, and based on that,
-get the most accurate and relevant information from the reporting physician.
-
-The Reporting Agent has access to a pre-chunked VectorDB containing all of the facility's policies.
-The agent can search these policies, and add any relevant ones to the report, to be used later.
-After reading these policies, it operates in two phases:
-  1. Contributing factors: Try to identify any factors that may have contributed to the incident. The
-  goal here is to make it easier for the reporter to get all of the relevant information down, with
-  little to no pressure. These questions are planned out based on the related policies, and / or
-  related past incidents.
-  2. Actions Taken: After getting the complete picture of the incident, the agent then tries to
-  identify what actions have been taken, directly linking the incident to specific policies.
-
-The finalized report is then sent to an Escalation Agent, which is a separate process to ensure no bias from the
-reporting agent's conversation. It is given the finalized report as well as relevant policies,
-and determines what severity level the incident is, grounded in multi-step reasoning, linked to
-specific policy sections. Based on this severity level, the escalation agent can then draft
-notifications to be sent.
-
-In order to ensure the best results, both agents are grounded in guidelines defined as "Just Culture". [2]
-The goal of that framework is to create an open space for reporting, in order to gain the most accurate
-and complete report to prevent future incidents.
-
-The full stage-by-stage design — the grounding model, the completeness gate, and the escalation
-subagent — is written up in the incident reporting design doc. [3]
 
 
 ### References

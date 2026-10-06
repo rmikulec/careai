@@ -1,9 +1,8 @@
 """OpenTelemetry tracing setup for the CareAI API.
 
 Wires a single self-hosted OTLP pipeline: a ``TracerProvider`` exporting spans
-over gRPC to an OTLP endpoint (a local Grafana otel-lgtm backend in the dev
-stack), with automatic instrumentation for FastAPI requests and the SQLAlchemy
-engine. The
+over gRPC to an OTLP endpoint (a local Jaeger backend in the dev stack), with
+automatic instrumentation for FastAPI requests and the SQLAlchemy engine. The
 reporting agent adds its own per-stage spans via ``opentelemetry.trace`` (a no-op
 until this configures a real provider), so agent code carries no hard dependency
 on telemetry being enabled.
